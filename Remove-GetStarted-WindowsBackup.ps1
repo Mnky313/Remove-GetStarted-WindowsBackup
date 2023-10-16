@@ -1,6 +1,6 @@
 function Install-Dependencies {
     # Check if DotNET SQLite binaries exist
-    $sqliteModule = Get-InstalledModule -Name mySQLite
+    $sqliteModule = Get-InstalledModule -Name mySQLite -ErrorAction Ignore
     if ($sqliteModule -eq $null) {
         Write-Host Installing MySQLite...
         Install-Module -Name MySQLite -Repository PSGallery -Confirm:$False
@@ -22,13 +22,15 @@ function Unlock-Package {
     # Make backup of DB
     Copy-Item "C:\ProgramData\Microsoft\Windows\AppRepository\StateRepository-Machine.srd" "C:\ProgramData\Microsoft\Windows\AppRepository\StateRepository-Machine.srd.bak"
 
-    # Drop Trigger
-    Stop-Service -Name "StateRepository" -Force # Windows is a bastard and keeps restarting the service (disabling doesn't help so I don't even bother)
-    Invoke-MySQLiteQuery -Path "C:\ProgramData\Microsoft\Windows\AppRepository\StateRepository-Machine.srd" -Query "DROP TRIGGER IF EXISTS TRG_AFTERUPDATE_Package_SRJournal"
+    # Copy DB to temp folder
+    Copy-Item "C:\ProgramData\Microsoft\Windows\AppRepository\StateRepository-Machine.srd" "C:\Windows\Temp\"
 
-    # Unlock ClientCBS
-    Stop-Service -Name "StateRepository" -Force # Windows is a bastard and keeps restarting the service (disabling doesn't help so I don't even bother)
-    Invoke-MySQLiteQuery -Path "C:\ProgramData\Microsoft\Windows\AppRepository\StateRepository-Machine.srd" -Query "UPDATE Package SET IsInbox = 0 WHERE PackageFullName LIKE '%Client.CBS%'"
+    # Drop Trigger & Unlock ClientCBS
+    Invoke-MySQLiteQuery -Path "C:\Windows\Temp\StateRepository-Machine.srd" -Query "DROP TRIGGER IF EXISTS TRG_AFTERUPDATE_Package_SRJournal"
+    Invoke-MySQLiteQuery -Path "C:\Windows\Temp\StateRepository-Machine.srd" -Query "UPDATE Package SET IsInbox = 0 WHERE PackageFullName LIKE '%Client.CBS%'"
+
+    # Replace DB
+    Copy-Item "C:\Windows\Temp\StateRepository-Machine.srd" "C:\ProgramData\Microsoft\Windows\AppRepository\" -Confirm:$false
 
     # Restart Service
     Start-Service -Name "StateRepository"
@@ -46,33 +48,30 @@ $xml = [xml](Get-Content $xmlPath)
 $node = $xml.Package.Applications.Application | Where-Object Id -eq 'WebExperienceHost'
 $node2 = $xml.Package.Applications.Application | Where-Object Id -eq 'WindowsBackup'
 # Check if those apps even exist & Remove ones that do
-if ($node -eq $null -And $node2 -eq $null) {
-    exit
-} else {
-    if ($node -ne $null) {
-        $node.ParentNode.RemoveChild($node)
-    }
-    if ($node2 -ne $null) {
-        $node2.ParentNode.RemoveChild($node2)
-    }
-    # Save temporary XML
-    $xml.save("C:\Windows\Temp\appxmanifest.xml") 
-
-    # Take ownership of package appxmanifest
-    takeown /f "C:\Windows\SystemApps\$CBSFolder" /a
-    takeown /f $xmlPath /a
-    icacls "C:\Windows\SystemApps\$CBSFolder" /grant "Administrators:(OI)(CI)F"
-    icacls $xmlPath /grant "Administrators:F"
-    
-    # Remove AppxPackage through PS
-    while ((Get-AppxPackage -Name "MicrosoftWindows.Client.CBS") -ne $null) {
-        Unlock-Package
-        Get-AppxPackage -Name "MicrosoftWindows.Client.CBS" | Remove-AppxPackage
-        Start-Sleep -Seconds 3
-    }
-    Copy-Item C:\Windows\Temp\appxmanifest.xml $xmlPath -Confirm:$False
-    Add-AppxPackage -DisableDevelopmentMode -Register $xmlPath
-    taskkill /f /im "explorer.exe"
-    Start-Sleep -Seconds 1
-    explorer
+if ($node -ne $null) {
+    $node.ParentNode.RemoveChild($node)
 }
+if ($node2 -ne $null) {
+    $node2.ParentNode.RemoveChild($node2)
+}
+# Save temporary XML
+$xml.save("C:\Windows\Temp\appxmanifest.xml") 
+
+# Take ownership of package appxmanifest
+takeown /f "C:\Windows\SystemApps\$CBSFolder" /a
+takeown /f $xmlPath /a
+icacls "C:\Windows\SystemApps\$CBSFolder" /grant "Administrators:(OI)(CI)F"
+icacls $xmlPath /grant "Administrators:F"
+
+# Replace XML
+Copy-Item C:\Windows\Temp\appxmanifest.xml $xmlPath -Confirm:$False
+
+# Re-register ClientCBS
+Unlock-Package
+Get-AppxPackage -Name "MicrosoftWindows.Client.CBS" | Remove-AppxPackage
+Add-AppxPackage -DisableDevelopmentMode -Register $xmlPath -ErrorAction SilentlyContinue #Sometimes install 'fails' because it's in use (however it appears to install fine so idk)
+
+# Restart Explorer
+taskkill /f /im "explorer.exe"
+Start-Sleep -Seconds 1
+explorer
