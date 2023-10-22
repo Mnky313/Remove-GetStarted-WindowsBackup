@@ -1,6 +1,6 @@
 # Remove-GetStarted-WindowsBackup
 
-This will break cumulative updates
+## This will break cumulative updates
 
 Powershell script to remove Windows 11 'Get Started' and Windows 10/11 'Windows Backup' Apps 
 
